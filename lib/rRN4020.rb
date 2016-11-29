@@ -4,8 +4,10 @@ require 'rubyserial'
 
 class RN4020
 
-  def open_serial(port, baud = 115_200,  bits = 8, parity = :none)
-    @serialport = Serial.new(port, baud, bits, parity)
+  attr_reader :data
+
+  def open_serial(port, baud = 115_200)
+    @serialport = Serial.new(port, baud, 8, :none)
   end
 
   def close_serial
@@ -20,14 +22,14 @@ class RN4020
     @serialport.write(cmd + "\n")
   end
 
-  def read(timeout = 0.1)
+  def read(timeout = 0.2)
     buf = ''
     cutoff = Time.now + timeout
     loop do
       byte = @serialport.getbyte
       buf << byte if byte
       break if Time.now > cutoff
-      break if byte == "\n"
+#      break if byte == "\r"
     end
     buf
   end
@@ -51,14 +53,13 @@ class RN4020
   end
 
   def version
-    return false unless write('V')
-    read()
+    write_and_return('V')
   end
 
-  def factory_default(type = :partial)
-    param = type == :partial ? 1 : 2
-    return false unless write_and_verify("SF,#{param}", 'AOK')
-    true
+  def factory_default(mode = :partial)
+    return write_and_verify("SF,1", 'AOK') if mode == :partial
+    return write_and_verify("SF,2", 'AOK') if mode == :full
+    raise "Invalid Mode"
   end
 
   def baud(rate)
@@ -66,16 +67,69 @@ class RN4020
     rate.to_s
   end
 
+  def write_and_return(cmd)
+    write(cmd)
+    read()
+  end
+
   def serialized_name(name)
     write_and_verify("S-,#{name}", 'AOK')
   end
 
-  def model(mdl)
-    write_and_verify("SDM,#{mdl}", 'AOK')
+  def model(mode, cmd = nil)
+    return write_and_return("GDM") if mode == :get
+    return write_and_verify("SDM,#{cmd}", 'AOK') if mode == :set
+    raise "Invalid Mode"
   end
 
-  def manufacturer(mf)
-    write_and_verify("SDN,#{mf}", 'AOK')
+  def manufacturer(mode, cmd = nil)
+    return write_and_return("GDN") if mode == :get
+    return write_and_verify("SDN,#{cmd}", 'AOK') if mode == :set
+    raise "Invalid Mode"
+  end
+
+  def software_revision(mode, cmd = nil)
+    return write_and_return("GDR") if mode == :get
+    return write_and_verify("SDR,#{cmd}", 'AOK') if mode == :set
+    raise "Invalid Mode"
+  end
+
+  def serial_number(mode, cmd = nil)
+    return write_and_return("GDS") if mode == :get
+    return write_and_verify("SDS,#{cmd}", 'AOK') if mode == :set
+    raise "Invalid Mode"
+  end
+
+  def valid_timer?(timer)
+    timer.to_s =~ /^timer_[123]$/
+  end
+
+  def valid_timer_value?(val)
+    (val > 0 && val < 0x80000000)
+  end
+
+  def start_timer(timer, value)
+    if valid_timer?(timer)
+      if valid_timer_value?(value)
+        write_and_verify("SM,#{(timer.to_s)[6..6]},#{sprintf("%08x", value)}",'AOK')
+      else
+        raise 'Invalid value'
+      end
+    else
+      raise 'Invalid timer'
+    end
+  end
+
+  def stop_timer(timer)
+    if valid_timer?(timer)
+      write_and_verify("SM,#{timer.to_s[6..6]},FFFFFFFF", 'AOK')
+    end
+  end
+
+  def name(mode, text = nil)
+    return write_and_verify("SN,#{text}", 'AOK') if mode == :set
+    return write_and_return('GN') if mode == :get
+    raise "Invalid Mode"
   end
 
   def supported_features(settings)
@@ -132,7 +186,8 @@ class RN4020
         raise "Invalid Supported feature (SR): #{setting}"
       end
     end
-    fmt = bits.to_s(16)
+    fmt = sprintf("%08x", bits)
+    puts "fmt = #{fmt}"
     return false unless write_and_verify("SR,#{fmt}", 'AOK')
     fmt
   end
@@ -181,7 +236,8 @@ class RN4020
         raise "Invalid Server Service (SS): #{setting}"
       end
     end
-    fmt = bits.to_s(16)
+    fmt = sprintf("%08x", bits)
+    puts "fmt = #{fmt}"
     return false unless write_and_verify("SR,#{fmt}", 'AOK')
     fmt
   end
@@ -203,11 +259,16 @@ class RN4020
   def scan(mode = :start)
     x = mode == :start ? "F" : "X"
     return false unless write_and_verify("#{x}", 'AOK')
+    @data
   end
 
   def bond(mode = :bond)
     x = mode == :bond ? "B" : "U"
     return false unless write_and_verify("#{x}", 'AOK')
+  end
+
+  def toggle_echo
+    write_and_verify('+', 'AOK')
   end
 
   def advertise(mode = :start)
@@ -217,6 +278,23 @@ class RN4020
 
   def reboot
     return false unless write_and_verify("R", 'AOK')
+    @data
+  end
+
+  def connect(id)
+    return false unless write_and_verify("E,0,#{id}", 'Connected')
+  end
+
+  def reconnect
+    write_and_return('E')
+  end
+
+  def disconnect
+    return false unless write_and_return("K")
+  end
+
+  def read_battery
+    write_and_return('CURV,2A19')
   end
 
   alias_method :v,  :version

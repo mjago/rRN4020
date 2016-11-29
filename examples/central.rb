@@ -3,49 +3,27 @@ require_relative '../lib/rRN4020'
 @role = :central
 
 @features = { :central => [:central],
-             :periphl => [:enable_authentication,
-                          :io_no_input_no_output] }
+              :periphl => [:enable_authentication,
+                           :io_no_input_no_output] }
 
 @server_services = { :central => [:device_information,
-                                 :battery,
-                                 :user_defined_private_service],
-                    :periphl => [:device_information,
-                                 :battery] }
+                                  :battery,
+                                  :user_defined_private_service],
+                     :periphl => [:device_information,
+                                  :battery] }
 
 @ports = { :central => '/dev/cu.usbmodem1411',
-          :periphl => '/dev/cu.usbmodem1421' }
+           :periphl => '/dev/cu.usbmodem1421' }
 
 @bauds = { :central => 115_200,
-          :periphl => 19_200 }
+           :periphl => 19_200 }
 
 @rn = RN4020.new
 @rn.open_serial(@ports[@role], @bauds[@role])
 
-sleep 2
-
-def state_to x
-  @state = x
-end
-
 def init
   puts
   puts @role
-  #    1.upto(10) do |count|
-  #      print count.to_s + ', '
-  #      sleep 0.25
-  #    end
-  # puts @rn.v
-  # puts @rn.serialized_name 'server'
-  # puts @rn.baud(115200)
-  # puts @rn.model('central_1')
-  # puts @rn.manufacturer('Acme')
-  # puts @rn.factory_default(:partial)
-  # puts @rn.supported_features(features)
-  # puts @rn.server_services(server_services)
-  # puts @rn.set_connection(0x100, 2, 0x100)
-  #@rn.scan(:start)
-  #sleep 4
-  #@rn.scan(:stop)
   @rn.write("\n")
   @rn.read
   puts @rn.factory_default(:partial)
@@ -57,7 +35,7 @@ def init
   puts "get software revision: #{@rn.software_revision(:get)}"
   puts "set model:             #{@rn.model(:set, 'RN4020')}"
   puts "get model:             #{@rn.model(:get)}"
-  puts "set manufacturer:      #{@rn.manufacturer(:set, 'iBandage')}"
+  puts "set manufacturer:      #{@rn.manufacturer(:set, 'ACME')}"
   puts "get manufacturer:      #{@rn.manufacturer(:get)}"
   puts "get serial number:     #{@rn.serial_number(:get)}"
   puts "start timer:           " + (@rn.start_timer(:timer_1, 100_000)).to_s
@@ -74,19 +52,21 @@ end
 def check_scan
   scan = @rn.read
   puts "scan = #{scan}"
-  if scan.length > 0
-    scan_ary = scan.split(',')
-    puts "scan_ary #{scan_ary}"
-    puts "scan_ary length is #{scan_ary.length}"
-    if scan_ary.length == 4
-      if scan_ary[2].include?('periphl_')
-        @rn.scan(:stop)
-        @periphl_id = scan_ary[0]
-        puts "@periphl_id = #{@periphl_id}"
-        return true
-      end
-    end
+  return unless scan.length > 0
+  scan_ary = scan.split(',')
+  puts "scan_ary #{scan_ary}"
+  puts "scan_ary length is #{scan_ary.length}"
+  return unless scan_ary.length == 4
+  if scan_ary[2].include?('periphl_')
+    @rn.scan(:stop)
+    @periphl_id = scan_ary[0]
+    puts "@periphl_id = #{@periphl_id}"
+    return true
   end
+end
+
+def state_to(x)
+  @state = x
 end
 
 state_to :init
@@ -143,13 +123,13 @@ loop do
     state_to :disconnect
   when :disconnect
     puts 'disconnecting'
-#    puts "disconnecting #{@rn.disconnect}"
+    # puts "disconnecting #{@rn.disconnect}"
     state_to :exit
   when :exit
     puts 'exiting'
     break
   else
-    raise("Error invalid state")
+    raise('Error invalid state')
   end
 end
 

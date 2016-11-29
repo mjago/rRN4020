@@ -29,7 +29,6 @@ class RN4020
       byte = @serialport.getbyte
       buf << byte if byte
       break if Time.now > cutoff
-#      break if byte == "\r"
     end
     buf
   end
@@ -57,9 +56,9 @@ class RN4020
   end
 
   def factory_default(mode = :partial)
-    return write_and_verify("SF,1", 'AOK') if mode == :partial
-    return write_and_verify("SF,2", 'AOK') if mode == :full
-    raise "Invalid Mode"
+    return write_and_verify('SF,1', 'AOK') if mode == :partial
+    return write_and_verify('SF,2', 'AOK') if mode == :full
+    raise 'Invalid Mode'
   end
 
   def baud(rate)
@@ -69,7 +68,7 @@ class RN4020
 
   def write_and_return(cmd)
     write(cmd)
-    read()
+    read
   end
 
   def serialized_name(name)
@@ -77,25 +76,25 @@ class RN4020
   end
 
   def model(mode, cmd = nil)
-    return write_and_return("GDM") if mode == :get
+    return write_and_return('GDM') if mode == :get
     return write_and_verify("SDM,#{cmd}", 'AOK') if mode == :set
     raise "Invalid Mode"
   end
 
   def manufacturer(mode, cmd = nil)
-    return write_and_return("GDN") if mode == :get
+    return write_and_return('GDN') if mode == :get
     return write_and_verify("SDN,#{cmd}", 'AOK') if mode == :set
     raise "Invalid Mode"
   end
 
   def software_revision(mode, cmd = nil)
-    return write_and_return("GDR") if mode == :get
+    return write_and_return('GDR') if mode == :get
     return write_and_verify("SDR,#{cmd}", 'AOK') if mode == :set
     raise "Invalid Mode"
   end
 
   def serial_number(mode, cmd = nil)
-    return write_and_return("GDS") if mode == :get
+    return write_and_return('GDS') if mode == :get
     return write_and_verify("SDS,#{cmd}", 'AOK') if mode == :set
     raise "Invalid Mode"
   end
@@ -109,27 +108,23 @@ class RN4020
   end
 
   def start_timer(timer, value)
-    if valid_timer?(timer)
-      if valid_timer_value?(value)
-        write_and_verify("SM,#{(timer.to_s)[6..6]},#{sprintf("%08x", value)}",'AOK')
-      else
-        raise 'Invalid value'
-      end
+    raise 'Invalid timer' unless valid_timer?(timer)
+    if valid_timer_value?(value)
+      write_and_verify("SM,#{(timer.to_s)[6..6]},#{sprintf("%08x", value)}",'AOK')
     else
-      raise 'Invalid timer'
+      raise 'Invalid value'
     end
   end
 
   def stop_timer(timer)
-    if valid_timer?(timer)
-      write_and_verify("SM,#{timer.to_s[6..6]},FFFFFFFF", 'AOK')
-    end
+    return unless valid_timer?(timer)
+    write_and_verify("SM,#{timer.to_s[6..6]},FFFFFFFF", 'AOK')
   end
 
   def name(mode, text = nil)
     return write_and_verify("SN,#{text}", 'AOK') if mode == :set
     return write_and_return('GN') if mode == :get
-    raise "Invalid Mode"
+    raise 'Invalid Mode'
   end
 
   def supported_features(settings)
@@ -251,19 +246,19 @@ class RN4020
         settings << setting
       end
     end
-    fmt = settings.collect{|s| sprintf("%04x", s)}
+    fmt = settings.collect { |s| sprintf("%04x", s) }
     return false unless write_and_verify("ST,#{fmt.join(',')}", 'AOK')
     fmt.join(',')
   end
 
   def scan(mode = :start)
-    x = mode == :start ? "F" : "X"
+    x = mode == :start ? 'F' : 'X'
     return false unless write_and_verify("#{x}", 'AOK')
     @data
   end
 
   def bond(mode = :bond)
-    x = mode == :bond ? "B" : "U"
+    x = mode == :bond ? 'B' : 'U'
     return false unless write_and_verify("#{x}", 'AOK')
   end
 
@@ -272,12 +267,12 @@ class RN4020
   end
 
   def advertise(mode = :start)
-    x = mode == :start ? "A" : "Y"
+    x = mode == :start ? 'A' : 'Y'
     return false unless write_and_verify("#{x}", 'AOK')
   end
 
   def reboot
-    return false unless write_and_verify("R", 'AOK')
+    return false unless write_and_verify('R', 'AOK')
     @data
   end
 
@@ -290,7 +285,7 @@ class RN4020
   end
 
   def disconnect
-    return false unless write_and_return("K")
+    return false unless write_and_return('K')
   end
 
   def read_battery

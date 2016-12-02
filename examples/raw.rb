@@ -6,11 +6,37 @@ CONNECTED = "Connected\r\n"
 BONDED = "Bonded\r\n"
 SECURED = "Secured\r\n"
 CONNECTION_END = "Connection End\r\n".freeze
+SERVER_SERVICE = 'Server Service'.freeze
+FULL_RESET = 'SF,2'.freeze
+CLEAN_PRIVATE_SERVICES = 'PZ'.freeze
+REBOOT = 'R,1'.freeze
+SCAN = 'F'.freeze
+STOP_SCAN = 'X'.freeze
+DUMP = 'D'.freeze
+ADVERTISE = 'A'.freeze
+BOND = 'B'.freeze
+LIST_CLIENT_SERVICES = 'LC'.freeze
+LIST_SERVER_SERVICES = 'LS'.freeze
+CLASS_UUID =   '123456789012345678901234567890FF'.freeze
+SERVICE_UUID = '1234567890123456789012345678904'.freeze
+#SERVICE_UUID_2 = '12345678901234567890123456789026'.freeze
+#SERVICE_UUID_3 = '12345678901234567890123456789027'.freeze
+#SERVICE_UUID_4 = '12345678901234567890123456789028'.freeze
+@bad_reads = 0
+@iters = 60
+@count = 0
+@reading = 0
+@modes = [:client, :server]
+@suppress_verbose_output = true
+@suppress_write_info = false
+@sensor_count = 5
+@read_buf = {}
+@ports = {}
+@ss = { :client => '00000000',
+        :server => '00000001' }
 
-#@server = nil
-#@client = nil
-
-@reading = 1234
+@sr = { :client => '80060000',
+        :server => '00060000' }
 
 def delay(duration = :short)
   sec = case duration
@@ -25,6 +51,7 @@ def delay(duration = :short)
 end
 
 def special_puts(x, y)
+  return if @suppress_verbose_output
   return if y.strip.empty?
   print "#{x}: "
   y.split("\n").each_with_index do |line,idx|
@@ -34,49 +61,43 @@ def special_puts(x, y)
   puts
 end
 
-def client_puts(x)
-  special_puts('client', x)
-end
-
-def server_puts(x)
-  special_puts('server', x)
-end
-
 def port(mode)
-  return @server if mode == :server
-  return @client if mode == :client
-  raise 'Invalid port in #port'
+  @ports[mode]
+  #  return @server if mode == :server
+  #  return @client if mode == :client
+  #  raise 'Invalid port in #port'
 end
 
 def write(mode, x)
-  puts "write #{mode}: #{x}"
+  print 'write' unless @suppress_verbose_output
+  puts " #{mode}: #{x}" unless x.empty? unless @suppress_write_info
   port(mode).write(x + "\r")
 end
 
 def write_and_receive(mode, send, rcv)
   write(mode, send)
-  buffer = ''
-  10.times do |count|
+  @read_buf[mode] = ''
+  @iters.times do |count|
     delay(:v_short)
-    read(mode)
-    buffer << @buf
-#    p buffer
-    break if buffer.include?(rcv)
+    @read_buf[mode] << read(mode)
+    #    p @read_buf[mode]
+    break if @read_buf[mode].include?(rcv)
     return false if count == 9
-    delay(:mid)
+    delay(:v_short) unless send == REBOOT
+    delay(:short) if send == REBOOT
   end
-  delay(:v_short)
   true
 end
 
 def read(mode)
-  @buf = ''
+  buffer = ''
   loop do
     byte = port(mode).getbyte
-    @buf << byte if byte
+    buffer << byte if byte
     break unless byte
   end
-  special_puts(mode, @buf)
+  special_puts(mode, buffer)
+  buffer
 end
 
 def device(mode)
@@ -96,170 +117,195 @@ def init_port(mode)
     begin
       return Serial.new(device(mode), baud(mode), 8, :none)
     rescue RubySerial::Exception
-      delay(:long)
+      delay(:short)
     end
   end
 end
 
-@client = init_port(:client)
-exit unless @client
-@server = init_port(:server)
-exit unless @server
-
-delay(:mid)
-write(:client, "\n")
-write(:server, "\n")
-delay(:mid)
-
-loop do
-  byte = @client.getbyte
-  break unless byte
+def flush(mode)
+  loop do
+    byte = @ports[mode].getbyte
+    break unless byte
+  end
 end
 
-loop do
-  byte = @server.getbyte
-  break unless byte
+def read_value(mode, uuid)
+  @read_buf[mode] = ''
+  return nil unless write(mode, "CURV,#{uuid}")
+  @iters.times do |count|
+    delay(:v_short)
+    @read_buf[mode] << read(mode)
+    break if @read_buf[mode].include?(AOK)
+    return nil if count == 9
+    delay(:v_short)
+  end
+  (/R,([0-9,a-f,A-F]*)\./).match(@read_buf[mode])
+  value = Regexp.last_match(1)
+  puts "#{mode}: value_#{uuid[-1..-1]}(#{value})" if value
+  return value
 end
 
-# client reset
-exit unless write_and_receive(:client, 'SF,2', AOK)
+def each_mode
+  @modes.each do |mode|
+    yield(mode)
+  end
+end
 
-# server reset
-exit unless write_and_receive(:server, 'SF,2', AOK)
+def each_sensor
+  @sensor_count.times do |count|
+    yield(count.to_s)
+  end
+end
 
-# client reboot
-exit unless write_and_receive(:client, 'R,1', CMD)
+def full_reset(mode)
+  loop { break if write_and_receive(mode, FULL_RESET, AOK) }
+  exit unless write_and_receive(mode, 'R,1', CMD)
+end
 
-#server reboot
-exit unless write_and_receive(:server, 'R,1', CMD)
-#write(:server, 'R,1')
-#delay(:long)
-#read(:server)
+def init_read_buf
+  each_mode { |md| @read_buf[md] = '' }
+end
 
-# Set client SS
-# GS,00000000
-exit unless write_and_receive(:client, 'SS,00000000', AOK)
+def init_ports
+  each_mode do |mode|
+    @ports[mode] = init_port(mode)
+    write(mode, "\n" * 2)
+    delay(:v_short)
+  end
+end
+#   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #
 
-# Set server SS
-# GS,40000000
-exit unless write_and_receive(:server, 'SS,00000001', AOK)
+#@ports[:server] = init_port(:server)
+#@ports[:client] = init_port(:client)
 
-# set client features
-# GR,80060000  (central, no_keyboard, no_display)
-exit unless write_and_receive(:client, 'SR,80060000', AOK)
+init_read_buf
+init_ports
 
-# set server features
-# GR,00060000  (central, no_keyboard, no_display)
-exit unless write_and_receive(:server, 'SR,00060000', AOK)
+each_mode{ |m| flush(m) }
+each_mode{ |m| full_reset(m) }
 
-# server clean private services
-exit unless write_and_receive(:server, 'PZ', AOK)
-# server clean private services
-exit unless write_and_receive(:client, 'PZ', AOK)
+#each_mode do |mode|
+#  loop do
+#    break if write_and_receive(mode, FULL_RESET, AOK)
+#  end
+#  exit unless write_and_receive(mode, 'R,1', CMD)
+#end
 
-# server Set private service UUID
-exit unless write_and_receive(:server, 'PS,123456789012345678901234567890FF', AOK)
+each_mode do |mode|
+  exit unless write_and_receive(mode, "SS,#{@ss[mode]}", AOK)
+  exit unless write_and_receive(mode, "SR,#{@sr[mode]}", AOK)
+  exit unless write_and_receive(mode, CLEAN_PRIVATE_SERVICES, AOK)
+end
 
-# server Set private service UUID
-exit unless write_and_receive(:server, 'PC,12345678901234567890123456789013,02,04', AOK)
-# characteristic to be readable, notifiable and 4 byte
+exit unless write_and_receive(:server, "PS,#{CLASS_UUID}", AOK)
 
-# client reboot
-exit unless write_and_receive(:client, 'R,1', CMD)
+each_sensor do |count|
+  exit unless write_and_receive(:server, "PC,#{SERVICE_UUID + count},02,04", AOK)
+end
+#  exit unless write_and_receive(:server, "PC,#{SERVICE_UUID_2},02,04", AOK)
+#  exit unless write_and_receive(:server, "PC,#{SERVICE_UUID_3},02,04", AOK)
+#  exit unless write_and_receive(:server, "PC,#{SERVICE_UUID_4},02,04", AOK)
 
-# server reboot
-exit unless write_and_receive(:server, 'R,1', CMD)
+each_mode do |mode|
+  exit unless write_and_receive(mode, REBOOT, CMD)
+end
 
 # client scan
-exit unless write_and_receive(:client, 'F', AOK)
+exit unless write_and_receive(:client, SCAN, AOK)
 
 # client stop scan
-exit unless write_and_receive(:client, 'X', AOK)
+exit unless write_and_receive(:client, STOP_SCAN, AOK)
 
-# client dump
-exit unless write_and_receive(:client, 'D', 'Server Service')
-
-# server dump
-exit unless write_and_receive(:server, 'D', 'Server Service')
-
-# client connect
-#exit unless write_and_receive(:client, 'E,0,001EC03E38ED', CONNECTED)
+each_mode do |mode|
+  exit unless write_and_receive(mode, DUMP, SERVER_SERVICE)
+end
 
 # client connect
 exit unless write_and_receive(:client, 'E,0,001EC03E38ED', AOK)
 
 # server advertise
-exit unless write_and_receive(:server, 'A', CONNECTED)
+exit unless write_and_receive(:server, ADVERTISE, CONNECTED)
 
 # client bond
-exit unless write_and_receive(:client, 'B', BONDED)
+exit unless write_and_receive(:client, BOND, BONDED)
 
 # server bond
-exit unless write_and_receive(:server, 'B', SECURED)
+exit unless write_and_receive(:server, BOND, SECURED)
 
-# client list services
-exit unless write_and_receive(:client, 'LC', 'END')
-
-exit unless write_and_receive(:client, 'LS', 'END')
-
-# server list client services
-exit unless write_and_receive(:server, 'LC', 'END')
-
-exit unless write_and_receive(:server, 'LS', 'END')
+each_mode do |mode|
+  exit unless write_and_receive(mode, LIST_CLIENT_SERVICES, 'END')
+  exit unless write_and_receive(mode, LIST_SERVER_SERVICES, 'END')
+end
 
 # server write reading
-exit unless write_and_receive(:server, "SUW,12345678901234567890123456789013,#{@reading}", AOK)
-@reading += 1
+#exit unless write_and_receive(:server, "SUW,#{SERVICE_UUID},#{@reading}", AOK)
+#exit unless write_and_receive(:server, "SUW,#{SERVICE_UUID},#{@reading}", AOK)
 
-# client dump
-exit unless write_and_receive(:client, 'D', 'Server Service')
-
-# server dump
-exit unless write_and_receive(:server, 'D', 'Server Service')
-
-# client read reading
-#exit unless write_and_receive(:client, 'CURV,12345678901234567890123456789013', AOK)
-#CUWC,123456789012345678901234567890FF,1
-#  p @buf
-#  exit
-#end
+each_mode do |mode|
+  exit unless write_and_receive(mode, DUMP, SERVER_SERVICE)
+end
 
 # client disconnect
 exit unless write_and_receive(:client, 'K', CONNECTION_END)
 
-10000.times do
-  # server write reading
-  exit unless write_and_receive(:server, "SUW,12345678901234567890123456789013,#{@reading}", AOK)
-  @reading += 1
+@suppress_write_info = true
 
-  # client reconnect
-  write(:client, 'E')
-  delay(:v_short)
-  read(:client)
+loop do
+  loop do
+    puts "\ncount: #{@count}"
+    puts "bad_reads: #{@bad_reads}" if @bad_reads > 0
+    puts "iters: #{@iters}" if @iters > 35
 
-  # server advertise
-  exit unless write_and_receive(:server, 'A', CONNECTED)
+    each_sensor do |count|
+      break unless write_and_receive(:server, "SUW,#{SERVICE_UUID + count},#{sprintf('%04d', @reading)}", AOK)
+    end
 
-  # server write reading
-  #  exit unless write_and_receive(:server, "SUW,12345678901234567890123456789013,#{@reading}", AOK)
-#  @reading += 1
+    # client reconnect
+    write(:client, 'E')
 
-  # client read reading
-  exit unless write_and_receive(:client, 'CURV,12345678901234567890123456789013', AOK)
-#  exit unless write_and_receive(:client, 'CUWC,12345678901234567890123456789013,1', AOK)
-#  exit unless write_and_receive(:client, 'CUWC,000B,1', AOK)
+    #todo    delay(:v_short)
+    #    read(:client)
 
-  # client disconnect
-  exit unless write_and_receive(:client, 'K', CONNECTION_END)
+    # server advertise
+    break unless write_and_receive(:server, 'A', CONNECTED)
+    retries = 0
+    @read_buf[:client] = ''
+    @iters.times do
+      @read_buf[:client] << read(:client)
+      break if @read_buf[:client].include?(CONNECTED)
+      delay(:v_short)
+      retries += 1
+    end
+    break if retries == @iters
 
-#  delay(:short)
+    # client read reading
+    each_sensor do |count|
+      break unless read_value(:client, SERVICE_UUID + count) == sprintf('%04d', @reading)
+    end
+    # #     break unless read_value(:client, SERVICE_UUID_2)
+    #    break unless read_value(:client, SERVICE_UUID_3)
+    #    break unless read_value(:client, SERVICE_UUID_4)
+
+    #    delay(:v_short)
+    # client disconnect
+    break unless write_and_receive(:client, 'K', CONNECTION_END)
+
+    #  delay(:short)
+    @count += 1
+    @reading += 1
+    @reading = 0 if @reading >= 10000
+  end
+  puts 'Error Locked up!'
+  puts 'Waiting'
+  each_mode { |md| write(md, 'K') }
+  sleep 2
+  each_mode { |md| flush(md) }
+  puts 'Retrying...'
+  @bad_reads += 1
+  @iters += 1
 end
 
-# client unbond
-exit unless write_and_receive(:client, 'U', AOK)
-
-# server unbond
-exit unless write_and_receive(:server, 'U', AOK)
-
-read(:client)
-read(:server)
+each_mode do |mode|
+  exit unless write_and_receive(mode, 'U', AOK)
+  read(mode)
+end

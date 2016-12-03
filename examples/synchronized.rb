@@ -81,7 +81,7 @@ def formatted_reading
   sprintf("%#{@service.ps_size_to_s}X", @reading)
 end
 
-def retry
+def reset
   puts 'Error Locked up!'
   puts 'Waiting'
   each_mode { |md| @rn.write(@chn[md].port, 'K') }

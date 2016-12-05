@@ -13,7 +13,6 @@ Service = Struct.new(:pc_uuid, :ps_uuid_prefix, :ps_count, :ps_attribs, :ps_size
   end
 end
 
-@rn = RN4020.new
 @bad_reads = 0
 @count = 0
 @reading = 0
@@ -48,19 +47,8 @@ def special_puts(x, y)
   puts
 end
 
-def init_port(mode)
-  10.times do
-    begin
-      @chn[mode].port = Serial.new(@chn[mode].device,
-                                     @chn[mode].baud, 8, :none)
-    rescue RubySerial::Exception
-      sleep 1
-    end
-  end
-end
-
 def each_mode
-  @chn.each_key { |md| yield(md) }
+  [@rn_client, @rn_server].each { |md| yield(md) }
 end
 
 def each_sensor
@@ -76,109 +64,116 @@ end
 def reset
   puts 'Error Locked up!'
   puts 'Waiting'
-  each_mode { |md| @rn.write(@chn[md].port, 'K') }
+  each_mode { |md| md.write('K') }
   sleep 2
-  each_mode { |md| @rn.flush(@chn[md].port) }
+  each_mode { |md| md.flush }
 
   puts 'Retrying...'
   @bad_reads += 1
 end
 
 def run_test
-  each_mode { |md| @rn.flush(@chn[md].port) }
-  each_mode { |md| @rn.full_reset(@chn[md].port) }
+  each_mode { |md| md.flush }
+  each_mode { |md| md.full_reset }
 
-  each_mode do |md|
-    exit unless @rn.server_services(@chn[md].port, @chn[md].ss)
-    exit unless @rn.options(@chn[md].port, @chn[md].sr)
-    exit unless @rn.clean_private_services(@chn[md].port)
-  end
-
-  exit unless @rn.ps(@chn[:server].port, @service.pc_uuid)
+  exit unless @rn_client.server_services(@chn[:client].ss)
+  exit unless @rn_server.server_services(@chn[:server].ss)
+  exit unless @rn_client.options(@chn[:client].sr)
+  exit unless @rn_server.options(@chn[:server].sr)
+  exit unless @rn_client.clean_private_services
+  exit unless @rn_server.clean_private_services
+  exit unless @rn_server.ps(@service.pc_uuid)
 
   @service.ps_count.times do |count|
-    exit unless @rn.pc(@chn[:server].port,
-                       @service.ps_uuid_prefix + count.to_s,
-                       @service.ps_attribs,
-                       @service.ps_size_to_s)
+    exit unless @rn_server.pc(@service.ps_uuid_prefix + count.to_s,
+                              @service.ps_attribs,
+                              @service.ps_size_to_s)
   end
 
-  each_mode do |md|
-    exit unless @rn.reboot(@chn[md].port)
+  each_mode { |md| exit unless md.reboot }
+
+  exit unless @rn_server.advertise
+
+  if @rn_client.scan
+    @server_addr = @rn_client.found[0..-3]
+    p @server_addr
+    exit unless @rn_client.stop_scan
+    exit unless @rn_client.connect(@server_addr)
+    exit unless @rn_client.bond
+
+    exit unless @rn_server.secure
+
+    each_mode do |md|
+      exit unless md.list_client_services
+      exit unless md.list_server_services
+    end
+
+    each_mode do |md|
+      exit unless md.dump
+    end
+    exit unless @rn_client.disconnect
   end
-
-  exit unless @rn.scan(@chn[:client].port)
-
-  exit unless @rn.stop_scan(@chn[:client].port)
-
-  each_mode do |md|
-    exit unless @rn.dump(@chn[md].port)
-  end
-
-  exit unless @rn.connect(@chn[:client].port, SERVER_MAC_ADDR)
-
-  exit unless @rn.advertise(@chn[:server].port)
-
-  exit unless @rn.bond(@chn[:client].port)
-
-  exit unless @rn.secure(@chn[:server].port)
-
-  each_mode do |md|
-    exit unless @rn.list_client_services(@chn[md].port)
-    exit unless @rn.list_server_services(@chn[md].port)
-  end
-
-  each_mode do |md|
-    exit unless @rn.dump(@chn[md].port)
-  end
-
-  exit unless @rn.disconnect(@chn[:client].port)
 
   @suppress_write_info = true
 
-  loop do
+  if @rn_client.bonded
+    puts "bonded = #{@rn_client.bonded}"
     loop do
-      puts "\ncount: #{@count}"
-      puts "bad_reads: #{@bad_reads}" if @bad_reads > 0
+      loop do
+        puts "\ncount: #{@count}"
+        puts "bad_reads: #{@bad_reads}" if @bad_reads > 0
 
-      each_sensor do |count|
-        break unless @rn.write_reading(@chn[:server].port,
-                                       PS_UUID_PREFIX + count,
-                                       formatted_reading)
+        each_sensor do |sn|
+          break unless @rn_server.write_reading(PS_UUID_PREFIX + sn,
+                                                formatted_reading)
+        end
+
+        @rn_client.reconnect
+        break unless @rn_server.advertise
+        break unless @rn_client.wait_for_connection
+
+        break unless @rn_client.dump if(@count % 32 == 8)
+        puts "bta       = #{@rn_client.bta       }" if(@count % 32 == 8)
+        puts "name      = #{@rn_client.name      }" if(@count % 32 == 8)
+        puts "role      = #{@rn_client.role      }" if(@count % 32 == 8)
+        puts "connected = #{@rn_client.connected }" if(@count % 32 == 8)
+        puts "bonded    = #{@rn_client.bonded    }" if(@count % 32 == 8)
+        puts "ss        = #{@rn_client.ss        }" if(@count % 32 == 8)
+
+        break unless @rn_server.dump if(@count % 32 == 24)
+        puts "bta       = #{@rn_server.bta       }" if(@count % 32 == 24)
+        puts "name      = #{@rn_server.name      }" if(@count % 32 == 24)
+        puts "role      = #{@rn_server.role      }" if(@count % 32 == 24)
+        puts "connected = #{@rn_server.connected }" if(@count % 32 == 24)
+        puts "bonded    = #{@rn_server.bonded    }" if(@count % 32 == 24)
+        puts "ss        = #{@rn_server.ss        }" if(@count % 32 == 24)
+
+        # client read reading
+        each_sensor do |sn|
+          value = @rn_client.read_value(PS_UUID_PREFIX + sn)
+          puts value
+          break unless value == formatted_reading
+        end
+
+        break unless @rn_client.disconnect
+        @count += 1
+        @reading += 1
+        @reading = 0 if @reading > 65535
       end
 
-      @rn.reconnect(@chn[:client].port)
-
-      break unless @rn.advertise(@chn[:server].port)
-
-      break unless @rn.wait_for_connection(@chn[:client].port)
-
-      # client read reading
-      each_sensor do |count|
-        value = @rn.read_value(@chn[:client].port, PS_UUID_PREFIX + count)
-        puts value
-        break unless value == formatted_reading
-      end
-
-      break unless @rn.disconnect(@chn[:client].port)
-      @count += 1
-      @reading += 1
-      @reading = 0 if @reading > 65535
+      reset
     end
-
-    reset
   end
 end
 
 def exit
   each_mode do |md|
-    next unless @rn.unbond(@chn[md].port)
-    @rn.read(md)
+    next unless md.unbond
+    md.read
   end
 end
 
 ### Start
 
-init_ports
 run_test
 exit

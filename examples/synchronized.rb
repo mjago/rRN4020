@@ -1,11 +1,11 @@
 require 'rubyserial'
 require_relative 'rn4020'
 
-SERVER_MAC_ADDR =  '001EC03E38ED'.freeze
-PC_UUID = '123456789012345678901234567890FF'.freeze
-PS_UUID_PREFIX = '1234567890123456789012345678904'.freeze # final digit missing!
+SERVER_MAC_ADDR = '001EC03E38ED'.freeze
+PC_UUID =        '123456789012345678901234567890FF'.freeze
+PS_UUID_PREFIX = '1234567890123456789012345678904'.freeze # final digit added later!
 
-Mode = Struct.new(:device, :baud, :ss, :sr, :port)
+Mode = Struct.new(:port, :baud, :ss, :sr)
 
 Service = Struct.new(:pc_uuid, :ps_uuid_prefix, :ps_count, :ps_attribs, :ps_size) do
   def ps_size_to_s
@@ -21,29 +21,21 @@ end
 @suppress_write_info = false
 @sensor_count = 5
 @read_buf = ''
-client_mode = Mode.new('/dev/cu.usbmodem1411',
-                       115_200,
-                       '00000000',
-                       '80060000',
-                       nil)
 
-server_mode = Mode.new('/dev/cu.usbmodem1421',
-                       19_200,
-                       '00000001',
-                       '00060000',
-                       nil)
+@chn = { client: Mode.new('/dev/cu.usbmodem1411',
+                          115_200,
+                          '00000000',
+                          '80060000'),
+         server: Mode.new('/dev/cu.usbmodem1421',
+                          19_200,
+                          '00000001',
+                          '00060000') }
 
-@chn = { client: client_mode, server: server_mode }
+@rn_client = RN4020.new(@chn[:client].port, (@chn[:client].baud))
+@rn_server = RN4020.new(@chn[:server].port, (@chn[:server].baud))
 @service = Service.new(PC_UUID, PS_UUID_PREFIX, 5, '02', 4)
 
 #   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #
-
-def init_ports
-  each_mode do |md|
-    init_port(md)
-    @rn.write(@chn[md].port, "\n" * 2)
-  end
-end
 
 def special_puts(x, y)
   return if @suppress_verbose_output

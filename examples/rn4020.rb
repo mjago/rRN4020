@@ -1,3 +1,20 @@
+require 'logger'
+
+module Logging
+
+  # This is the magical bit that gets mixed into your classes
+
+  def logger
+    Logging.logger
+  end
+
+  # Global, memoized, lazy initialized instance of a logger
+
+  def self.logger
+    @logger ||= Logger.new('log.log')
+  end
+end
+
 class RN4020
 
   attr_reader :bta
@@ -24,6 +41,7 @@ class RN4020
   ADVERTISE = 'A'.freeze
 
   AOK = "AOK\r\n".freeze
+  AOK_CONNECTED = "AOK\r\nConnected\r\n".freeze
   CMD = "CMD\r\n".freeze
   CONNECTED = "Connected\r\n".freeze
   SERVER_SERVICE = 'Server Service'.freeze
@@ -31,27 +49,52 @@ class RN4020
   SECURED = "Secured\r\n".freeze
   CONNECTION_END = "Connection End\r\n".freeze
 
-  def init_port(port, baud)
-    count = 0
-    @port = Serial.new(port, baud, 8, :none)
-  rescue RubySerial::Exception
-    count += 1
-    raise if count >= 5
-    sleep 1
+  include Logging
+
+  def debug_write(x)
+#    p x.to_s.strip
+#    return if x.to_s.strip.empty?
+    self.logger.info("#{@id} << #{x}")
   end
 
-  def initialize(port, baud = 115_200)
+  def debug_read(x)
+    @debug_str << x unless x == "\n"
+    return unless x == "\n"
+#    return if x.to_s.strip.empty?
+    self.logger.info("#{@id} >> #{@debug_str}")
+    @debug_str = ''
+  end
+
+  def init_port(port, baud)
+    count = 0
+    loop do
+      begin
+        @port = Serial.new(port, baud, 8, :none)
+        return true
+      rescue RubySerial::Exception
+        count += 1
+        raise if count >= 5
+        sleep 1
+      end
+    end
+  end
+
+  def initialize(id, port, baud = 115_200)
+    @iterations = 180
+    @debug_str = ''
+    @id = id
     init_port(port, baud)
   end
 
   def write(x)
     @port.write(x + "\r")
+    debug_write(x + "\r")
   end
 
   def write_and_receive(send, rcv)
     write(send)
     @read_buf = ''
-    60.times do |count|
+    @iterations.times do |count|
       delay(:short)
       @read_buf << read
       break if @read_buf.include?(rcv)
@@ -67,6 +110,7 @@ class RN4020
     loop do
       byte = @port.getbyte
       buffer << byte if byte
+      debug_read(byte.chr) if byte
       break unless byte
     end
     buffer
@@ -84,7 +128,7 @@ class RN4020
 
   def read_and_receive(rcv)
     @read_buf = ''
-    60.times do |retries|
+    @iterations.times do |retries|
       @read_buf << read
       break if @read_buf.include?(rcv)
       delay(:short)
@@ -96,7 +140,7 @@ class RN4020
   def read_value(uuid)
     @read_buf = ''
     return nil unless write("CURV,#{uuid}")
-    60.times do |count|
+    @iterations.times do |count|
       delay(:short)
       @read_buf << read
       break if @read_buf.include?(AOK)
@@ -147,17 +191,25 @@ class RN4020
   end
 
   def dump_parse
-    /BTA=([0-9a-fA-F_]*)\r\nName=([a-zA-Z0-9_]*)\r\nRole=([a-zA-Z0-9_]*)\r\nConnected=([a-zA-Z0-9,]*)\r\nBonded=([0-9a-fA-F_,]*)\r\nServer Service=([0-9a-fA-F]*)\r\n/ =~ @read_buf
-    @bta = Regexp.last_match(1)
-    @name = Regexp.last_match(2)
-    @role = Regexp.last_match(3)
-    @connected = Regexp.last_match(4)
-    @bonded = Regexp.last_match(5)
-    @ss = Regexp.last_match(6)
+    if /BTA=([0-9a-fA-F_]*)\r\nName=([a-zA-Z0-9_]*)\r\nRole=([a-zA-Z0-9_]*)\r\nConnected=([a-zA-Z0-9,]*)\r\nBonded=([0-9a-fA-F_,]*)\r\nServer Service=([0-9a-fA-F]*)\r\n/ =~ @read_buf
+      @bta = Regexp.last_match(1)
+      @name = Regexp.last_match(2)
+      @role = Regexp.last_match(3)
+      @connected = Regexp.last_match(4)
+      @bonded = Regexp.last_match(5)
+      @ss = Regexp.last_match(6)
+      true
+    else
+      false
+    end
   end
 
   def dump
+#    3.times do
     success = write_and_receive(DUMP, SERVER_SERVICE)
+    #  break if success
+#      sleep 1
+#    end
     dump_parse
     success
   end
@@ -167,7 +219,11 @@ class RN4020
   end
 
   def advertise
-    write_and_receive(ADVERTISE, CONNECTED)
+    write_and_receive(ADVERTISE, AOK)
+  end
+
+  def advertise_to_connect
+    write_and_receive(ADVERTISE, AOK_CONNECTED)
   end
 
   def bond
@@ -202,22 +258,31 @@ class RN4020
     read_and_receive(CONNECTED)
   end
 
+  def wait_for_disconnect
+    read_and_receive(CONNECTION_END)
+  end
+
   def scan
-    puts 'here'
     write(SCAN)
     @read_buf = ''
-    60.times do
+    @iterations.times do
       @read_buf << read
       if /AOK\r\n([0-9a-fA-F]{12},0),(-[0-9a-fA-F]{2})/ =~ @read_buf
         @found = Regexp.last_match(1)
         @gain = Regexp.last_match(2)
-        puts "Scan: #{@found}"
-        puts "Gain: #{@gain}"
         return true
       end
       delay(:short)
     end
     false
+  end
+
+  def wake
+    write_and_receive('.', "ERR\r\n")
+  end
+
+  def go_dormant
+    write('O')
   end
 
   def unbond
